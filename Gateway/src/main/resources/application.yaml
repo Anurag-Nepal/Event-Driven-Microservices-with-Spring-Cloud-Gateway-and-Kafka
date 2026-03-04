@@ -1,0 +1,169 @@
+server:
+  port: 8080
+
+spring:
+  application:
+    name: api-gateway
+
+  # Security – JWT validation
+  security:
+    oauth2:
+      resourceserver:
+        jwt:
+          issuer-uri: ${JWT_ISSUER_URI:http://localhost:8900/realms/myrealm}
+
+  cloud:
+    gateway:
+      # Global CORS configuration (adjust allowedOrigins for your frontend)
+      globalcors:
+        cors-configurations:
+          '[/**]':
+            allowedOrigins: "https://your-frontend.com"
+            allowedMethods: "GET,POST,PUT,DELETE,OPTIONS"
+            allowedHeaders: "*"
+            allowCredentials: true
+
+      # HTTP client settings (timeouts)
+      httpclient:
+        connect-timeout: 2000
+        response-timeout: 5s
+
+      routes:
+        # Producer Service
+        - id: producer-service
+          uri: lb://ASYNC-JOB-INGESTION-PRODUCER
+          predicates:
+            - Path=/producer/**
+          filters:
+            - StripPrefix=1
+            # Circuit breaker with fallback
+            - name: CircuitBreaker
+              args:
+                name: producerBreaker
+                fallbackUri: forward:/fallback/producer
+            # Retry on server errors
+            - name: Retry
+              args:
+                retries: 3
+                series: SERVER_ERROR
+                statuses: SERVICE_UNAVAILABLE, GATEWAY_TIMEOUT
+                methods: GET, POST
+                backoff:
+                  firstBackoff: 50ms
+                  maxBackoff: 500ms
+                  factor: 2
+            # Rate limiting (IP‑based)
+            - name: RequestRateLimiter
+              args:
+                redis-rate-limiter.replenishRate: 10      # tokens per second
+                redis-rate-limiter.burstCapacity: 20      # max tokens
+                redis-rate-limiter.requestedTokens: 1     # tokens per request
+                key-resolver: "#{@ipKeyResolver}"
+          metadata:
+            connect-timeout: 5000
+            response-timeout: 15000
+
+        # Consumer Service
+        - id: consumer-service
+          uri: lb://ASYNC-JOB-INGESTION-CONSUMER
+          predicates:
+            - Path=/consumer/**
+          filters:
+            - StripPrefix=1
+            - name: CircuitBreaker
+              args:
+                name: consumerBreaker
+                fallbackUri: forward:/fallback/consumer
+            - name: Retry
+              args:
+                retries: 3
+                series: SERVER_ERROR
+                statuses: SERVICE_UNAVAILABLE, GATEWAY_TIMEOUT
+                methods: GET, POST
+                backoff:
+                  firstBackoff: 50ms
+                  maxBackoff: 500ms
+                  factor: 2
+            - name: RequestRateLimiter
+              args:
+                redis-rate-limiter.replenishRate: 10
+                redis-rate-limiter.burstCapacity: 20
+                redis-rate-limiter.requestedTokens: 1
+                key-resolver: "#{@ipKeyResolver}"
+          metadata:
+            connect-timeout: 5000
+            response-timeout: 15000
+        - id: auth-service
+          uri: lb://AUTH-SERVICE
+          predicates:
+            - Path=/auth/**
+          filters:
+            - StripPrefix=0
+            # Circuit breaker with fallback
+            - name: CircuitBreaker
+              args:
+                name: authBreaker
+                fallbackUri: forward:/fallback/auth
+            # Retry on transient errors
+            - name: Retry
+              args:
+                retries: 3
+                series: SERVER_ERROR
+                statuses: SERVICE_UNAVAILABLE, GATEWAY_TIMEOUT
+                methods: POST, GET
+                backoff:
+                  firstBackoff: 50ms
+                  maxBackoff: 500ms
+                  factor: 2
+            # Rate limiting (IP‑based) to prevent brute‑force attacks
+            - name: RequestRateLimiter
+              args:
+                redis-rate-limiter.replenishRate: 5      # 5 requests per second
+                redis-rate-limiter.burstCapacity: 10     # up to 10 in a burst
+                redis-rate-limiter.requestedTokens: 1
+                key-resolver: "#{@ipKeyResolver}"
+          metadata:
+            connect-timeout: 5000
+            response-timeout: 15000
+
+      default-filters:
+        - DedupeResponseHeader=Access-Control-Allow-Origin, RETAIN_FIRST
+  data:
+    redis:
+      port: ${REDIS_PORT:6379}
+      host: ${REDIS_HOST:localhost}
+      password: ${REDIS_PASSWORD:}
+      timeout: 2000ms
+      lettuce:
+        pool:
+          max-active: 8
+          max-idle: 8
+          min-idle: 0
+          max-wait: -1
+eureka:
+  client:
+    serviceUrl:
+      defaultZone: ${EUREKA_SERVER:http://localhost:8761/eureka/}
+    register-with-eureka: true
+    fetch-registry: true
+  instance:
+    preferIpAddress: true
+    lease-renewal-interval-in-seconds: 30
+    lease-expiration-duration-in-seconds: 90
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info,metrics,prometheus
+  endpoint:
+    health:
+      show-details: always
+
+logging:
+  level:
+    org.springframework.cloud.gateway: DEBUG
+    com.netflix.discovery: INFO
+    org.springframework.security: DEBUG
+  pattern:
+    console: "%d{yyyy-MM-dd HH:mm:ss} [%thread] %-5level %logger{36} - %msg%n"

@@ -1,0 +1,45 @@
+server:
+  port: 8083
+
+spring:
+  application:
+    name: auth-service
+
+  security:
+    oauth2:
+      client:
+        registration:
+          keycloak-admin:
+            provider: keycloak
+            client-id: ${KEYCLOAK_ADMIN_CLIENT_ID:admin-cli}
+            client-secret: ${KEYCLOAK_ADMIN_CLIENT_SECRET:ooIgkUtudqOgk7Tb0rqA1CDXHNhu2fw2}
+            authorization-grant-type: client_credentials
+            scope: openid
+          keycloak-login:
+            provider: keycloak
+            client-id: ${KEYCLOAK_CLIENT_ID:api-gateway}
+            client-secret: ${KEYCLOAK_CLIENT_SECRET:ApA5KwTctWkuybgcEv0vzUEwNr8VdbpW}
+            authorization-grant-type: password
+            scope: openid
+        provider:
+          keycloak:
+            issuer-uri: ${KEYCLOAK_ISSUER_URI:http://localhost:8900/realms/myrealm}
+            token-uri: ${KEYCLOAK_TOKEN_URI:http://localhost:8900/realms/myrealm/protocol/openid-connect/token}
+
+keycloak:
+  admin:
+    users-url: ${KEYCLOAK_ADMIN_USERS_URL:http://localhost:8900/admin/realms/myrealm/users}
+
+eureka:
+  client:
+    serviceUrl:
+      defaultZone: ${EUREKA_SERVER:http://localhost:8761/eureka/}
+    register-with-eureka: true
+    fetch-registry: true
+  instance:
+    preferIpAddress: true
+
+logging:
+  level:
+    com.anurag.authservice: DEBUG
+    org.springframework.web.reactive.function.client: TRACE
